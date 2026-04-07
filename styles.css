@@ -1,0 +1,443 @@
+/*
+ ╔══════════════════════════════════════════════════════════╗
+ ║          SocietyConnect — styles.css                     ║
+ ║  Custom cursor · page loader · server badge · animations ║
+ ╚══════════════════════════════════════════════════════════╝
+*/
+
+/* ─────────────────────────────────────────
+   CSS VARIABLES
+───────────────────────────────────────── */
+:root {
+  --gold: #f59e0b;
+  --gold-dim: rgba(245, 158, 11, 0.18);
+  --gold-faint: rgba(245, 158, 11, 0.06);
+  --green: #10b981;
+  --red: #ef4444;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: rgba(255, 255, 255, 0.07);
+  --txt: #e6edf3;
+  --muted: #7d8590;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --transition-snap: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ─────────────────────────────────────────
+   BASE RESET
+───────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  min-height: 100vh;
+  cursor: default;
+  -webkit-font-smoothing: antialiased;
+}
+
+input, textarea, select, button {
+  font-family: inherit;
+  outline: none;
+}
+
+button, a, [role="button"], select, .clickable {
+  cursor: pointer !important;
+}
+
+/* ─────────────────────────────────────────
+   SCROLLBAR
+───────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 158, 11, 0.35);
+}
+
+/* ─────────────────────────────────────────
+   PAGE LOAD OVERLAY
+───────────────────────────────────────── */
+#page-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: #0d1117;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  transition: opacity 0.7s ease, visibility 0.7s ease;
+}
+
+#page-loader.loaded {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.loader-logo {
+  font-size: 48px;
+  animation: logoBounce 0.8s var(--transition-spring) both;
+}
+
+.loader-title {
+  font-family: 'DM Serif Display', serif;
+  font-size: 27px;
+  color: var(--txt);
+  letter-spacing: -0.4px;
+  animation: fadeSlideUp 0.6s 0.2s both ease;
+}
+
+.loader-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  animation: fadeSlideUp 0.6s 0.28s both ease;
+}
+
+.loader-bar {
+  width: 200px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 99px;
+  overflow: hidden;
+  animation: fadeSlideUp 0.6s 0.34s both ease;
+}
+
+.loader-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--gold), #fbbf24, var(--gold));
+  background-size: 200% 100%;
+  border-radius: 99px;
+  animation: loadFill 1.2s 0.4s forwards cubic-bezier(0.4, 0, 0.2, 1),
+             shimmer 1.5s 0.4s infinite linear;
+}
+
+/* ─────────────────────────────────────────
+   NATIVE CURSORS
+───────────────────────────────────────── */
+body { cursor: default; }
+
+button, a, [role="button"], .clickable,
+.srv-option, #server-status-badge,
+select, label { cursor: pointer !important; }
+
+input, textarea { cursor: text !important; }
+
+[disabled], button:disabled { cursor: not-allowed !important; }
+
+/* ─────────────────────────────────────────
+   SERVER STATUS BADGE (fixed bottom-right)
+───────────────────────────────────────── */
+#server-status-badge {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px 7px 10px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'DM Sans', sans-serif;
+  letter-spacing: 0.3px;
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer !important;
+  transition: all 0.3s var(--transition-snap);
+  animation: badgeEntrance 0.7s 1.5s both var(--transition-spring);
+  user-select: none;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+#server-status-badge:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+
+/* Badge colour variants */
+#server-status-badge.local {
+  background: rgba(16, 20, 32, 0.88);
+  color: #e2c37e;
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+#server-status-badge.online {
+  background: rgba(6, 20, 15, 0.88);
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.32);
+}
+
+#server-status-badge.offline {
+  background: rgba(28, 10, 10, 0.88);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.32);
+}
+
+/* Dot inside badge */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+#server-status-badge.local .status-dot {
+  background: var(--gold);
+  animation: pingLocal 2s ease-in-out infinite;
+}
+
+#server-status-badge.online .status-dot {
+  background: var(--green);
+  animation: pingOnline 2s ease-in-out infinite;
+}
+
+#server-status-badge.offline .status-dot {
+  background: var(--red);
+}
+
+/* ─────────────────────────────────────────
+   SERVER TOGGLE PANEL (popup above badge)
+───────────────────────────────────────── */
+#server-panel {
+  position: fixed;
+  bottom: 62px;
+  right: 20px;
+  z-index: 8999;
+  background: rgba(13, 17, 23, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: 14px;
+  width: 244px;
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  transform: translateY(10px) scale(0.96);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.26s var(--transition-snap);
+}
+
+#server-panel.open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: all;
+}
+
+.srv-title {
+  font-size: 10px;
+  color: #4b5563;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.srv-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer !important;
+  margin-bottom: 6px;
+  border: 1px solid transparent;
+  transition: all 0.18s ease;
+  font-family: 'DM Sans', sans-serif;
+  user-select: none;
+}
+
+.srv-option:last-of-type { margin-bottom: 0; }
+
+.srv-option.active {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.26);
+}
+
+.srv-option:not(.active):hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.srv-option-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.srv-option-local .srv-option-dot { background: var(--gold); }
+.srv-option-server .srv-option-dot { background: var(--green); }
+
+.srv-option-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--txt);
+}
+
+.srv-option-sub {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 1px;
+}
+
+.srv-check {
+  margin-left: auto;
+  color: var(--gold);
+  font-size: 15px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.srv-option.active .srv-check { opacity: 1; }
+
+.srv-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 10px 0;
+}
+
+.srv-url-label {
+  font-size: 10px;
+  color: #4b5563;
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-family: 'DM Sans', sans-serif;
+  letter-spacing: 0.5px;
+}
+
+.srv-url-field {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.3);
+  color: #9ca3af;
+  font-size: 11px;
+  font-family: 'DM Mono', 'Courier New', monospace;
+  box-sizing: border-box;
+  transition: border-color 0.15s, color 0.15s;
+  cursor: pointer !important;
+}
+
+.srv-url-field:focus {
+  border-color: rgba(245, 158, 11, 0.4);
+  color: var(--txt);
+  outline: none;
+}
+
+.srv-save-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px;
+  border-radius: 9px;
+  border: none;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #111;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer !important;
+  transition: opacity 0.15s, transform 0.12s;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.srv-save-btn:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.srv-save-btn:active {
+  transform: scale(0.98);
+}
+
+/* ─────────────────────────────────────────
+   SMOOTH PAGE TRANSITIONS (app panels)
+───────────────────────────────────────── */
+.fade-in {
+  animation: fadeIn 0.38s var(--transition-snap);
+}
+
+/* Staggered entrance helpers */
+.stagger-1 { animation: fadeSlideUp 0.5s 0.04s  both ease; }
+.stagger-2 { animation: fadeSlideUp 0.5s 0.10s  both ease; }
+.stagger-3 { animation: fadeSlideUp 0.5s 0.17s  both ease; }
+.stagger-4 { animation: fadeSlideUp 0.5s 0.25s  both ease; }
+.stagger-5 { animation: fadeSlideUp 0.5s 0.33s  both ease; }
+
+/* ─────────────────────────────────────────
+   BUTTON HOVER MICRO-INTERACTION
+───────────────────────────────────────── */
+button {
+  transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease !important;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97) translateY(0);
+}
+
+/* ─────────────────────────────────────────
+   KEYFRAMES
+───────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes logoBounce {
+  from { opacity: 0; transform: scale(0.5) translateY(20px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes loadFill {
+  0%   { width: 0%; }
+  55%  { width: 72%; }
+  100% { width: 100%; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes badgeEntrance {
+  from { opacity: 0; transform: translateY(14px) scale(0.88); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+@keyframes pingLocal {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.65); }
+  50%       { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+}
+
+@keyframes pingOnline {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.65); }
+  50%       { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+}
