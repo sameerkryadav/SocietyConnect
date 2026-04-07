@@ -1272,4 +1272,4 @@ if __name__ == "__main__":
 ║    POST /api/requests — preferred_provider_id        ║
 ╚══════════════════════════════════════════════════════╝
     """)
-    socketio.run(app, debug=False, host="0.0.0.0", port=PORT, use_reloader=False)
+    socketio.run(app, debug=False, host="0.0.0.0", port=PORT, use_reloader=False, allow_unsafe_werkzeug=True)
