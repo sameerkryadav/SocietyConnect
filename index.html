@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
   /* ── EmailJS Config ─────────────────────────────────────────────────
      Replace the 3 values below with your actual EmailJS credentials.
@@ -425,14 +426,30 @@ function Auth({onLogin}){
           onLogin(r.user);
         }
       }else{
-        const r=await API.signupSendOtp({
-          name:f.name,email:f.email,password:f.pass,
-          phone:f.phone.replace(/\D/g,""),
-          role:f.role,skill:f.role==="provider"?f.skill:"",
-          society:f.society,experience:f.exp||""
-        });
-        setSignupSessionKey(r.session_key);
-        if(r.otp)setSignupDevOtp(r.otp);
+        // Generate OTP entirely on the frontend — no backend call needed here
+        const generatedOtp = String(Math.floor(100000 + Math.random() * 900000));
+        const svcId  = window.EMAILJS_SERVICE_ID;
+        const tplId  = window.EMAILJS_TEMPLATE_ID;
+        const pubKey = window.EMAILJS_PUBLIC_KEY;
+        const ejsConfigured = svcId !== "YOUR_SERVICE_ID" && tplId !== "YOUR_TEMPLATE_ID" && pubKey !== "YOUR_PUBLIC_KEY";
+        if(ejsConfigured){
+          try{
+            await emailjs.send(svcId, tplId, {
+              to_email: f.email,
+              to_name:  f.name,
+              otp_code: generatedOtp,
+              app_name: "SocietyConnect"
+            }, pubKey);
+            setSignupDevOtp(""); // email sent — don't show on screen
+          } catch(ejsErr){
+            console.warn("EmailJS send failed:", ejsErr);
+            setSignupDevOtp(generatedOtp); // fallback — show on screen
+          }
+        } else {
+          // EmailJS not configured yet — show OTP on screen for testing
+          setSignupDevOtp(generatedOtp);
+        }
+        setSignupSessionKey(generatedOtp); // store locally for verification
         setSignupOtpStep(true);
       }
     }catch(e){setErr(e.message);}
@@ -474,23 +491,11 @@ function Auth({onLogin}){
                     setLoginOtp(joined);
                     if(v&&i<5)document.getElementById(`lotp${i+1}`)?.focus();
                     if(joined.length===6){
+                      // auto-submit
                       setLoad(true);setErr("");
                       API.loginVerifyOtp(pendingUserId,joined).then(r=>{
-                        localStorage.setItem("sc_token",r.token);onLogin(r.user);
-                      }).catch(e=>{setErr(e.message);setLoad(false);});
-                    }
-                  }}
-                  onPaste={e=>{
-                    e.preventDefault();
-                    const pasted=e.clipboardData.getData("text").replace(/\D/g,"").slice(0,6);
-                    if(!pasted)return;
-                    setLoginOtp(pasted);
-                    for(let k=0;k<6;k++){const el=document.getElementById(`lotp${k}`);if(el)el.value=pasted[k]||"";}
-                    document.getElementById(`lotp${Math.min(pasted.length,5)}`)?.focus();
-                    if(pasted.length===6){
-                      setLoad(true);setErr("");
-                      API.loginVerifyOtp(pendingUserId,pasted).then(r=>{
-                        localStorage.setItem("sc_token",r.token);onLogin(r.user);
+                        localStorage.setItem("sc_token",r.token);
+                        onLogin(r.user);
                       }).catch(e=>{setErr(e.message);setLoad(false);});
                     }
                   }}
@@ -528,27 +533,16 @@ function Auth({onLogin}){
                     setSignupOtp(joined);
                     if(v&&i<5)document.getElementById(`sotp${i+1}`)?.focus();
                     if(joined.length===6){
-                      if(joined!==signupSessionKey){setErr("Incorrect OTP. Please try again.");return;}
+                      if(joined!==signupSessionKey){setErr("Incorrect OTP. Please try again.");setLoad(false);return;}
                       setLoad(true);setErr("");
-                      API.signup({name:f.name,email:f.email,password:f.pass,phone:f.phone.replace(/\D/g,""),role:f.role,skill:f.role==="provider"?f.skill:"",society:f.society,experience:f.exp||""}).then(r=>{
-                        localStorage.setItem("sc_token",r.token);onLogin(r.user);
-                      }).catch(e=>{setErr(e.message);setLoad(false);});
-                    }
-                  }}
-                  onPaste={e=>{
-                    e.preventDefault();
-                    const pasted=e.clipboardData.getData("text").replace(/\D/g,"").slice(0,6);
-                    if(!pasted)return;
-                    setSignupOtp(pasted);
-                    // fill all visible boxes then focus last filled
-                    for(let k=0;k<6;k++){const el=document.getElementById(`sotp${k}`);if(el)el.value=pasted[k]||"";}
-                    const nextEmpty=pasted.length<6?pasted.length:5;
-                    document.getElementById(`sotp${nextEmpty}`)?.focus();
-                    if(pasted.length===6){
-                      if(pasted!==signupSessionKey){setErr("Incorrect OTP. Please try again.");return;}
-                      setLoad(true);setErr("");
-                      API.signup({name:f.name,email:f.email,password:f.pass,phone:f.phone.replace(/\D/g,""),role:f.role,skill:f.role==="provider"?f.skill:"",society:f.society,experience:f.exp||""}).then(r=>{
-                        localStorage.setItem("sc_token",r.token);onLogin(r.user);
+                      API.signup({
+                        name:f.name,email:f.email,password:f.pass,
+                        phone:f.phone.replace(/\D/g,""),
+                        role:f.role,skill:f.role==="provider"?f.skill:"",
+                        society:f.society,experience:f.exp||""
+                      }).then(r=>{
+                        localStorage.setItem("sc_token",r.token);
+                        onLogin(r.user);
                       }).catch(e=>{setErr(e.message);setLoad(false);});
                     }
                   }}
@@ -560,25 +554,18 @@ function Auth({onLogin}){
               if(signupOtp!==signupSessionKey){setErr("Incorrect OTP. Please try again.");return;}
               setLoad(true);setErr("");
               try{
-                const r=await API.signup({name:f.name,email:f.email,password:f.pass,phone:f.phone.replace(/\D/g,""),role:f.role,skill:f.role==="provider"?f.skill:"",society:f.society,experience:f.exp||""});
-                localStorage.setItem("sc_token",r.token);onLogin(r.user);
+                const r=await API.signup({
+                  name:f.name,email:f.email,password:f.pass,
+                  phone:f.phone.replace(/\D/g,""),
+                  role:f.role,skill:f.role==="provider"?f.skill:"",
+                  society:f.society,experience:f.exp||""
+                });
+                localStorage.setItem("sc_token",r.token);
+                onLogin(r.user);
               }catch(e){setErr(e.message);}
               setLoad(false);
             }} disabled={load||signupOtp.length<6} full>{load?"Creating Account…":"Verify & Create Account ✓"}</Btn>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:10}}>
-              <button onClick={()=>{setSignupOtpStep(false);setSignupOtp("");setSignupDevOtp("");setSignupSessionKey(null);setErr("");}} style={{background:"none",border:"none",color:"#7d8590",fontSize:12,cursor:"pointer"}}>← Back</button>
-              <button onClick={async()=>{
-                setErr("");setSignupOtp("");
-                const newOtp=String(Math.floor(100000+Math.random()*900000));
-                const svcId=window.EMAILJS_SERVICE_ID,tplId=window.EMAILJS_TEMPLATE_ID,pubKey=window.EMAILJS_PUBLIC_KEY;
-                const ejsOk=svcId!=="YOUR_SERVICE_ID"&&tplId!=="YOUR_TEMPLATE_ID"&&pubKey!=="YOUR_PUBLIC_KEY";
-                if(ejsOk){try{await emailjs.send(svcId,tplId,{to_email:f.email,to_name:f.name,otp_code:newOtp,app_name:"SocietyConnect"},pubKey);}catch{setSignupDevOtp(newOtp);}}
-                else setSignupDevOtp(newOtp);
-                setSignupSessionKey(newOtp);
-                setErr("New OTP sent!");
-                setTimeout(()=>setErr(""),3000);
-              }} style={{background:"none",border:"none",color:"#f59e0b",fontSize:12,fontWeight:600,cursor:"pointer"}}>🔄 Resend OTP</button>
-            </div>
+            <button onClick={()=>{setSignupOtpStep(false);setSignupOtp("");setSignupDevOtp("");setSignupSessionKey(null);setErr("");}} style={{width:"100%",marginTop:10,background:"none",border:"none",color:"#7d8590",fontSize:12,cursor:"pointer"}}>← Back to Sign Up</button>
           </div>}
 
           {!otpStep&&!signupOtpStep&&<>
@@ -1069,37 +1056,11 @@ function ChatView({t,user,reqs}){
   const [msgs,setMsgs]=useState([]);
   const [inp,setInp]=useState("");
   const [loading,setLoading]=useState(false);
-  const [refreshing,setRefreshing]=useState(false);
   const endRef=useRef(null);
-  const pollRef=useRef(null);
   useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
   const activeReqs=reqs.filter(r=>r.status!=="Completed");
-  const loadMsgs=async(reqId,silent=false)=>{
-    if(!silent)setLoading(true);
-    try{
-      const fresh=await API.getMessages(reqId);
-      setMsgs(prev=>{
-        // Only update if something actually changed (avoid re-render flicker)
-        if(JSON.stringify(prev.map(m=>m.id))===JSON.stringify(fresh.map(m=>m.id)))return prev;
-        return fresh;
-      });
-    }catch{}
-    if(!silent)setLoading(false);
-  };
-  const selectReq=(req)=>{
-    setSelReq(req);loadMsgs(req.id);
-    // Start polling every 5s for new messages
-    if(pollRef.current)clearInterval(pollRef.current);
-    pollRef.current=setInterval(()=>loadMsgs(req.id,true),5000);
-  };
-  // Stop polling when leaving chat or unmounting
-  useEffect(()=>()=>{if(pollRef.current)clearInterval(pollRef.current);},[]);
-  const manualRefresh=async()=>{
-    if(!selReq)return;
-    setRefreshing(true);
-    await loadMsgs(selReq.id,true);
-    setRefreshing(false);
-  };
+  const loadMsgs=async(reqId)=>{setLoading(true);try{setMsgs(await API.getMessages(reqId));}catch{setMsgs([]);}setLoading(false);};
+  const selectReq=(req)=>{setSelReq(req);loadMsgs(req.id);};
   const send=async()=>{
     if(!inp.trim()||!selReq)return;
     const text=inp;setInp("");
@@ -1124,12 +1085,8 @@ function ChatView({t,user,reqs}){
   return(
     <div className="fade-in">
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
-        <button onClick={()=>{setSelReq(null);if(pollRef.current)clearInterval(pollRef.current);}} style={{background:"none",border:"none",color:t.muted,fontSize:20,padding:"2px 6px 2px 0"}}>←</button>
-        <div style={{flex:1}}><h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:t.txt,margin:0}}>{selReq.service_type} Chat</h2><p style={{color:t.muted,fontSize:12,marginTop:2}}>{selReq.description}</p></div>
-        <button onClick={manualRefresh} title="Refresh messages" style={{background:"none",border:`1px solid ${t.border}`,color:t.muted,borderRadius:8,padding:"5px 10px",fontSize:13,display:"flex",alignItems:"center",gap:5}}>
-          <span style={{display:"inline-block",transition:"transform 0.4s",transform:refreshing?"rotate(360deg)":"none"}}>↻</span>
-          <span style={{fontSize:11}}>{refreshing?"…":"Refresh"}</span>
-        </button>
+        <button onClick={()=>setSelReq(null)} style={{background:"none",border:"none",color:t.muted,fontSize:20,padding:"2px 6px 2px 0"}}>←</button>
+        <div><h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:t.txt,margin:0}}>{selReq.service_type} Chat</h2><p style={{color:t.muted,fontSize:12,marginTop:2}}>{selReq.description}</p></div>
       </div>
       <Card t={t} style={{padding:0,overflow:"hidden"}}>
         <div style={{padding:"11px 14px",borderBottom:`1px solid ${t.border}`}}><Badge s={selReq.status}/></div>
@@ -1869,14 +1826,13 @@ function AdminPanel({t}){
 ══════════════════════════════════════ */
 function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
   const [avail,setAvail]=useState(user.available!==0);
-  // myJobs is now a useMemo below — removed useState
+  const [myJobs,setMyJobs]=useState([]);
   const [tab,setTab]=useState("open");
   const [otpInputs,setOtpInputs]=useState({});
   const [otpLoading,setOtpLoading]=useState({});
   const [otpError,setOtpError]=useState({});
   const [showOtpField,setShowOtpField]=useState({});
   const [decliningId,setDecliningId]=useState(null);
-  const [declinedIds,setDeclinedIds]=useState(new Set()); // track locally-declined request IDs
   const [actionLoading,setActionLoading]=useState({});
   const [loadingJobs,setLoadingJobs]=useState(true);
   const [confirmCancelJob,setConfirmCancelJob]=useState(null);
@@ -1884,34 +1840,37 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
 
   const userSkills=useMemo(()=>(user.skill||"").split(",").map(x=>x.trim()).filter(Boolean),[user.skill]);
 
-  // Fetch fresh data when provider panel mounts (supplements App-level loadData)
+  // Load provider's assigned jobs from server on mount
   useEffect(()=>{
     (async()=>{
       setLoadingJobs(true);
       try{
         const all=await API.getRequests();
+        // Merge into globalReqs
         setGlobalReqs(all);
+        // My jobs = assigned to me and not pending/cancelled/declined
+        const mine=all.filter(r=>r.provider_id===user.id&&!["Pending","Cancelled","Declined"].includes(r.status));
+        setMyJobs(mine);
       }catch{}
       setLoadingJobs(false);
     })();
   },[user.id]);
 
-  // myJobs derived from globalReqs — always in sync, never vanishes on navigate
-  const myJobs=useMemo(()=>
-    globalReqs.filter(r=>r.provider_id===user.id&&!["Pending","Cancelled","Declined"].includes(r.status))
-  ,[globalReqs,user.id]);
-
   const openReqs=useMemo(()=>globalReqs.filter(r=>{
     if(r.status!=="Pending"||r.provider_id)return false;
-    if(declinedIds.has(r.id))return false; // hide locally declined
     return userSkills.includes(r.service_type);
-  }),[globalReqs,userSkills,declinedIds]);
+  }),[globalReqs,userSkills]);
 
   const acceptJob=async(req)=>{
     setActionLoading(p=>({...p,[req.id]:"accept"}));
     try{
       const updated=await API.acceptReq(req.id);
       setGlobalReqs(prev=>prev.map(r=>r.id===req.id?{...r,...updated}:r));
+      setMyJobs(p=>{
+        // don't duplicate
+        if(p.find(j=>j.id===req.id))return p.map(j=>j.id===req.id?{...j,...updated}:j);
+        return [...p,{...req,...updated}];
+      });
       setNotifs(p=>[{id:Date.now(),type:"assign",icon:"✅",title:"Job Accepted",message:`Accepted: ${req.service_type}`,time:"just now",read_flag:0},...p]);
       setTab("mine");
     }catch(e){err(e.message);}
@@ -1920,17 +1879,11 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
 
   const declineJob=async(req)=>{
     setDecliningId(req.id);
-    // Optimistically hide the job immediately before API call
-    setDeclinedIds(prev=>new Set([...prev,req.id]));
     try{
       await API.declineReq(req.id);
       setGlobalReqs(prev=>prev.map(r=>r.id===req.id?{...r,declined:true}:r));
       setNotifs(p=>[{id:Date.now(),type:"info",icon:"⏭️",title:"Job Skipped",message:`Skipped ${req.service_type} request.`,time:"just now",read_flag:0},...p]);
-    }catch(e){
-      // Revert the optimistic hide if API fails
-      setDeclinedIds(prev=>{const n=new Set(prev);n.delete(req.id);return n;});
-      err(e.message);
-    }
+    }catch(e){err(e.message);}
     setDecliningId(null);
   };
 
@@ -1944,7 +1897,8 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setActionLoading(p=>({...p,[job.id]:"cancel"}));
     try{
       await API.cancelReq(job.id);
-            setGlobalReqs(prev=>prev.filter(r=>r.id!==job.id));
+      setMyJobs(p=>p.filter(j=>j.id!==job.id));
+      setGlobalReqs(prev=>prev.filter(r=>r.id!==job.id));
       setNotifs(p=>[{id:Date.now(),type:"info",icon:"❌",title:"Job Cancelled",message:`${job.service_type} job cancelled.`,time:"just now",read_flag:0},...p]);
       ok("Job cancelled.");
     }catch(e){err(e.message);}
@@ -1955,6 +1909,7 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setActionLoading(p=>({...p,[job.id]:"otw"}));
     try{
       const updated=await API.updateRequest(job.id,{status:"On the way"});
+      setMyJobs(p=>p.map(j=>j.id===job.id?{...j,...updated}:j));
       setGlobalReqs(prev=>prev.map(r=>r.id===job.id?{...r,...updated}:r));
     }catch(e){err(e.message);}
     setActionLoading(p=>({...p,[job.id]:undefined}));
@@ -1964,6 +1919,7 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setActionLoading(p=>({...p,[jobId]:newStatus}));
     try{
       const updated=await API.updateRequest(jobId,{status:newStatus});
+      setMyJobs(p=>p.map(j=>j.id===jobId?{...j,...updated}:j));
       setGlobalReqs(prev=>prev.map(r=>r.id===jobId?{...r,...updated}:r));
     }catch(e){err(e.message);}
     setActionLoading(p=>({...p,[jobId]:undefined}));
@@ -1973,6 +1929,7 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setActionLoading(p=>({...p,[job.id]:"start"}));
     try{
       const updated=await API.startWork(job.id);
+      setMyJobs(p=>p.map(j=>j.id===job.id?{...j,...updated}:j));
       setGlobalReqs(prev=>prev.map(r=>r.id===job.id?{...r,...updated}:r));
       ok("Work started! Customer notified.");
     }catch(e){err(e.message);}
@@ -1985,6 +1942,7 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setOtpLoading(p=>({...p,[jobId]:true}));setOtpError(p=>({...p,[jobId]:""}));
     try{
       const updated=await API.completeWithOtp(jobId,otp);
+      setMyJobs(p=>p.map(j=>j.id===jobId?{...j,...updated}:j));
       setGlobalReqs(prev=>prev.map(r=>r.id===jobId?{...r,...updated}:r));
       setNotifs(p=>[{id:Date.now(),type:"complete",icon:"✅",title:"Job Completed!",message:`${updated.service_type} job marked done.`,time:"just now",read_flag:0},...p]);
       setShowOtpField(p=>({...p,[jobId]:false}));
