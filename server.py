@@ -14,6 +14,10 @@ import datetime
 import hashlib
 import os
 import re
+import random
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from functools import wraps
 
 # ─────────────────────────────────────────
@@ -22,6 +26,38 @@ from functools import wraps
 SECRET_KEY = os.environ.get("SECRET_KEY", "societyconnect_secret_key_2024")
 DB_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "societyconnect.db")
 PORT       = int(os.environ.get("PORT", 5000))
+EMAIL_USER = os.environ.get("EMAIL_USER", "")
+EMAIL_PASS = os.environ.get("EMAIL_PASS", "")
+
+# In-memory OTP store { key: {"otp":"123456","expires":datetime} }
+otp_store = {}
+
+def send_email_otp(to_email, otp, purpose="verification"):
+    """Send OTP via Gmail SMTP. Returns True on success."""
+    if not EMAIL_USER or not EMAIL_PASS:
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["From"]    = EMAIL_USER
+        msg["To"]      = to_email
+        msg["Subject"] = f"SocietyConnect OTP: {otp}"
+        html = f"""<div style="font-family:sans-serif;max-width:420px;margin:auto;padding:32px;background:#0d1117;color:#e6edf3;border-radius:16px">
+          <div style="text-align:center;margin-bottom:20px"><div style="font-size:40px">&#127961;</div>
+          <h2 style="color:#f59e0b;margin:8px 0 4px">SocietyConnect</h2></div>
+          <p style="font-size:15px">Your OTP for <b>{purpose}</b>:</p>
+          <div style="background:#161b22;border:2px solid #f59e0b;border-radius:12px;padding:20px;text-align:center;margin:20px 0">
+            <span style="font-size:42px;font-weight:900;letter-spacing:14px;color:#f59e0b">{otp}</span>
+          </div>
+          <p style="color:#7d8590;font-size:12px;text-align:center">Expires in 10 minutes. Do not share.</p></div>"""
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP("smtp.gmail.com", 587) as srv:
+            srv.starttls()
+            srv.login(EMAIL_USER, EMAIL_PASS)
+            srv.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Email error: {e}")
+        return False
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
@@ -118,6 +154,12 @@ def init_db():
     # Add declined_by column (comma-separated provider user IDs)
     try:
         c.execute("ALTER TABLE service_requests ADD COLUMN declined_by TEXT DEFAULT ''")
+    except Exception:
+        pass
+
+    # Add image_data column for photo uploads
+    try:
+        c.execute("ALTER TABLE service_requests ADD COLUMN image_data TEXT DEFAULT ''")
     except Exception:
         pass
 
@@ -358,6 +400,7 @@ def signup():
 
 @app.route("/api/auth/login", methods=["POST"])
 def login():
+    """Step 1: verify credentials, send OTP to email."""
     d = request.get_json(force=True)
     email    = (d.get("email") or "").lower().strip()
     password = d.get("password") or ""
@@ -375,85 +418,225 @@ def login():
     if not user:
         return jsonify({"error": "Invalid email or password"}), 401
 
+    otp = str(random.randint(100000, 999999))
+    otp_store[f"login_{user['id']}"] = {
+        "otp": otp,
+        "expires": datetime.datetime.utcnow() + datetime.timedelta(minutes=10)
+    }
+    email_sent = send_email_otp(email, otp, "Login")
+    resp = {"otp_required": True, "user_id": user["id"], "email_sent": email_sent}
+    if not email_sent:
+        # Email not configured — return OTP directly so app still works
+        resp["otp"] = otp
+        resp["note"] = "Email not configured. Use this OTP to login."
+    return jsonify(resp)
+
+
+@app.route("/api/auth/login/verify-otp", methods=["POST"])
+def login_verify_otp():
+    """Step 2: verify OTP, return JWT token."""
+    d = request.get_json(force=True)
+    user_id = d.get("user_id")
+    otp     = (d.get("otp") or "").strip()
+
+    key = f"login_{user_id}"
+    stored = otp_store.get(key)
+    if not stored:
+        return jsonify({"error": "OTP not found. Please login again."}), 400
+    if datetime.datetime.utcnow() > stored["expires"]:
+        otp_store.pop(key, None)
+        return jsonify({"error": "OTP expired. Please login again."}), 400
+    if stored["otp"] != otp:
+        return jsonify({"error": "Incorrect OTP. Try again."}), 400
+
+    otp_store.pop(key, None)
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    db.close()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
     token = generate_token(user["id"], user["role"])
     return jsonify({"token": token, "user": dict(user)})
 
 
 @app.route("/api/auth/forgot-password", methods=["POST"])
 def forgot_password():
-    """Generate reset token and return it (in production you'd email it)."""
+    """Send OTP to email for password reset."""
     d = request.get_json(force=True)
     email = (d.get("email") or "").lower().strip()
-
     if not email:
         return jsonify({"error": "Email is required"}), 400
 
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-
-    if not user:
-        # Security: don't reveal if email exists
-        return jsonify({"message": "If that email exists, a reset code has been sent."}), 200
-
-    import secrets
-    reset_token = secrets.token_hex(4).upper()   # 8-char code
-    expires = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
-
-    # Delete old tokens for this user
-    db.execute("DELETE FROM password_resets WHERE user_id=?", (user["id"],))
-    db.execute(
-        "INSERT INTO password_resets (user_id, token, expires_at) VALUES (?,?,?)",
-        (user["id"], reset_token, expires)
-    )
-    db.commit()
     db.close()
 
-    # In a real app you would email this. For now, return it directly.
-    return jsonify({
-        "message": "Reset code generated.",
-        "reset_token": reset_token,   # ← shown in app for demo purposes
-        "note": "In production this would be emailed."
-    }), 200
+    if not user:
+        return jsonify({"message": "If that email exists, an OTP has been sent."}), 200
+
+    otp = str(random.randint(100000, 999999))
+    otp_store[f"forgot_{user['id']}"] = {
+        "otp": otp,
+        "expires": datetime.datetime.utcnow() + datetime.timedelta(minutes=10)
+    }
+    email_sent = send_email_otp(email, otp, "Password Reset")
+    resp = {"message": "OTP sent to your email.", "user_id": user["id"], "email_sent": email_sent}
+    if not email_sent:
+        resp["otp"] = otp
+        resp["note"] = "Email not configured. Use this OTP to reset."
+    return jsonify(resp)
 
 
-@app.route("/api/auth/reset-password", methods=["POST"])
-def reset_password():
+@app.route("/api/auth/forgot-password/verify-otp", methods=["POST"])
+def forgot_verify_otp():
+    """Verify forgot-password OTP and set new password."""
     d = request.get_json(force=True)
-    email       = (d.get("email") or "").lower().strip()
-    reset_token = (d.get("reset_token") or "").upper().strip()
+    user_id      = d.get("user_id")
+    otp          = (d.get("otp") or "").strip()
     new_password = d.get("new_password") or ""
 
-    if not email or not reset_token or not new_password:
-        return jsonify({"error": "Email, reset code, and new password are required"}), 400
+    if not user_id or not otp or not new_password:
+        return jsonify({"error": "user_id, otp and new_password required"}), 400
     if len(new_password) < 6:
         return jsonify({"error": "Password must be at least 6 characters"}), 400
 
+    key = f"forgot_{user_id}"
+    stored = otp_store.get(key)
+    if not stored:
+        return jsonify({"error": "OTP not found. Please request again."}), 400
+    if datetime.datetime.utcnow() > stored["expires"]:
+        otp_store.pop(key, None)
+        return jsonify({"error": "OTP expired. Please request again."}), 400
+    if stored["otp"] != otp:
+        return jsonify({"error": "Incorrect OTP."}), 400
+
+    otp_store.pop(key, None)
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-    if not user:
-        db.close()
-        return jsonify({"error": "No account found with that email"}), 404
-
-    rec = db.execute(
-        "SELECT * FROM password_resets WHERE user_id=? AND token=? AND used=0",
-        (user["id"], reset_token)
-    ).fetchone()
-
-    if not rec:
-        db.close()
-        return jsonify({"error": "Invalid or expired reset code"}), 400
-
-    # Check expiry
-    expires = datetime.datetime.fromisoformat(rec["expires_at"])
-    if datetime.datetime.utcnow() > expires:
-        db.close()
-        return jsonify({"error": "Reset code has expired. Request a new one."}), 400
-
-    db.execute("UPDATE users SET password=? WHERE id=?", (hash_pw(new_password), user["id"]))
-    db.execute("UPDATE password_resets SET used=1 WHERE id=?", (rec["id"],))
+    db.execute("UPDATE users SET password=? WHERE id=?", (hash_pw(new_password), user_id))
     db.commit()
     db.close()
-    return jsonify({"message": "Password updated successfully. Please log in."}), 200
+    return jsonify({"success": True, "message": "Password reset! Please login."})
+
+
+@app.route("/api/auth/signup/send-otp", methods=["POST"])
+def signup_send_otp():
+    """Step 1 of signup: validate form data and send OTP to email before creating account."""
+    d = request.get_json(force=True)
+
+    name     = (d.get("name") or "").strip()
+    email    = (d.get("email") or "").lower().strip()
+    password = d.get("password") or ""
+    phone    = (d.get("phone") or "").strip()
+    role     = d.get("role", "customer")
+    skill    = (d.get("skill") or "").strip()
+
+    # Validation
+    if not name:
+        return jsonify({"error": "Full name is required"}), 400
+    if not email or not is_valid_email(email):
+        return jsonify({"error": "A valid email address is required"}), 400
+    if not password or len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
+    if not phone or not is_valid_phone(phone):
+        return jsonify({"error": "A valid 10-digit phone number is required"}), 400
+    if role == "provider" and not skill:
+        return jsonify({"error": "Skill is required for providers"}), 400
+
+    # Check if email already registered
+    db = get_db()
+    existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+    db.close()
+    if existing:
+        return jsonify({"error": "This email is already registered"}), 409
+
+    # Generate OTP and store all signup data temporarily
+    otp = str(random.randint(100000, 999999))
+    session_key = f"signup_{email}_{random.randint(10000, 99999)}"
+    otp_store[session_key] = {
+        "otp": otp,
+        "expires": datetime.datetime.utcnow() + datetime.timedelta(minutes=10),
+        "signup_data": d  # preserve full signup payload for step 2
+    }
+
+    email_sent = send_email_otp(email, otp, "Sign Up Verification")
+    resp = {"otp_required": True, "session_key": session_key, "email_sent": email_sent}
+    if not email_sent:
+        resp["otp"] = otp
+        resp["note"] = "Email not configured. Use this OTP to complete signup."
+    return jsonify(resp)
+
+
+@app.route("/api/auth/signup/verify-otp", methods=["POST"])
+def signup_verify_otp():
+    """Step 2 of signup: verify OTP and create the account."""
+    d = request.get_json(force=True)
+    session_key = (d.get("session_key") or "").strip()
+    otp         = (d.get("otp") or "").strip()
+
+    if not session_key or not otp:
+        return jsonify({"error": "session_key and otp are required"}), 400
+
+    stored = otp_store.get(session_key)
+    if not stored:
+        return jsonify({"error": "Session expired or not found. Please sign up again."}), 400
+    if datetime.datetime.utcnow() > stored["expires"]:
+        otp_store.pop(session_key, None)
+        return jsonify({"error": "OTP expired. Please sign up again."}), 400
+    if stored["otp"] != otp:
+        return jsonify({"error": "Incorrect OTP. Try again."}), 400
+
+    # OTP matched — consume session and create account
+    otp_store.pop(session_key, None)
+    sd = stored["signup_data"]
+
+    name     = (sd.get("name") or "").strip()
+    email    = (sd.get("email") or "").lower().strip()
+    password = sd.get("password") or ""
+    phone    = (sd.get("phone") or "").strip()
+    role     = sd.get("role", "customer")
+    skill    = (sd.get("skill") or "").strip()
+    society  = (sd.get("society") or "Shapoorji Complex, New Town").strip()
+
+    digits    = re.sub(r'\D', '', phone)[-10:]
+    phone_fmt = f"+91 {digits[:5]} {digits[5:]}"
+
+    db = get_db()
+    try:
+        db.execute(
+            """INSERT INTO users (name,email,password,role,skill,flat,phone,address,society,avatar)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (name, email, hash_pw(password), role,
+             skill if role == "provider" else "",
+             sd.get("flat", ""), phone_fmt, sd.get("address", ""), society,
+             name[:2].upper())
+        )
+        db.commit()
+        user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+
+        if role == "provider" and skill:
+            primary_skill = skill.split(",")[0].strip()
+            skill_prices = {
+                "Plumber": (300, 500, "hr"), "Electrician": (400, 600, "hr"),
+                "Cleaner": (200, 300, "hr"), "Shifting": (1000, 3000, "job"),
+            }
+            pmin, pmax, unit = skill_prices.get(primary_skill, (300, 500, "hr"))
+            db.execute(
+                "INSERT INTO providers (user_id,skill,price_min,price_max,price_unit) VALUES (?,?,?,?,?)",
+                (user["id"], skill, pmin, pmax, unit)
+            )
+            db.commit()
+
+        token = generate_token(user["id"], user["role"])
+        return jsonify({"token": token, "user": dict(user)}), 201
+
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            return jsonify({"error": "This email is already registered"}), 409
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
 
 
 # ═══════════════════════════════════════════
@@ -746,7 +929,8 @@ def create_request():
     service_type = d.get("service_type", "")
     description  = d.get("description", "")
     emergency    = 1 if d.get("emergency") else 0
-    preferred_provider_id = d.get("preferred_provider_id")  # Customer can select a specific provider
+    image_data   = d.get("image_data", "")   # base64 image string
+    preferred_provider_id = d.get("preferred_provider_id")
 
     if not service_type or not description:
         return jsonify({"error": "service_type and description are required"}), 400
@@ -756,17 +940,15 @@ def create_request():
     society = user["society"] if user else ""
 
     provider_id = None
-    # Do NOT auto-assign — always broadcast to matching providers so they can accept/decline
-
     status      = "Pending"
     price_map   = {"Plumber":"₹300–500","Electrician":"₹400–600","Cleaner":"₹200–300","Shifting":"₹1,000–3,000"}
     cost        = price_map.get(service_type, "TBD")
 
     db.execute(
         """INSERT INTO service_requests
-           (customer_id, provider_id, service_type, description, status, emergency, cost, society)
-           VALUES (?,?,?,?,?,?,?,?)""",
-        (request.user_id, provider_id, service_type, description, status, emergency, cost, society)
+           (customer_id, provider_id, service_type, description, status, emergency, cost, society, image_data)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (request.user_id, provider_id, service_type, description, status, emergency, cost, society, image_data)
     )
     db.commit()
     req_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -884,8 +1066,9 @@ def decline_request(req_id):
     db.execute("UPDATE service_requests SET declined_by=? WHERE id=?",
                (",".join(declined_ids), req_id))
     db.commit()
+    updated = db.execute("SELECT * FROM service_requests WHERE id=?", (req_id,)).fetchone()
     db.close()
-    return jsonify({"success": True})
+    return jsonify({"success": True, "request": dict(updated)})
 
 
 @app.route("/api/requests/<int:req_id>/accept", methods=["POST"])
@@ -1080,18 +1263,66 @@ def create_review():
         return jsonify({"error": "provider_id required"}), 400
     db = get_db()
     try:
+        # Prevent duplicate rating for same request
+        existing = db.execute(
+            "SELECT id FROM reviews WHERE request_id=? AND customer_id=?",
+            (d.get("request_id"), request.user_id)
+        ).fetchone()
+        if existing:
+            db.close()
+            return jsonify({"error": "You have already rated this job"}), 409
+
         db.execute("INSERT INTO reviews (request_id,customer_id,provider_id,rating,comment) VALUES (?,?,?,?,?)",
                    (d.get("request_id"), request.user_id, provider_id, rating, d.get("comment","")))
         avg = db.execute("SELECT AVG(rating) AS a, COUNT(*) AS c FROM reviews WHERE provider_id=?", (provider_id,)).fetchone()
         db.execute("UPDATE providers SET rating=?, reviews_count=? WHERE user_id=?",
                    (round(avg["a"],1), avg["c"], provider_id))
         db.commit()
-        push_notif(provider_id, "New Review", f"You received {rating}⭐!", "review", "⭐")
+        push_notif(provider_id, "New Review! ⭐", f"You received a {rating}⭐ rating!", "review", "⭐")
         db.close()
         return jsonify({"success": True, "new_rating": round(avg["a"],1)}), 201
     except Exception as e:
         db.close()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/reviews/check/<int:req_id>", methods=["GET"])
+@token_required
+def check_my_rating(req_id):
+    """Check if the current user has already rated a specific request."""
+    db = get_db()
+    row = db.execute(
+        "SELECT rating, comment FROM reviews WHERE request_id=? AND customer_id=?",
+        (req_id, request.user_id)
+    ).fetchone()
+    db.close()
+    if row:
+        return jsonify({"rated": True, "rating": row["rating"], "comment": row["comment"]})
+    return jsonify({"rated": False, "rating": None})
+
+
+@app.route("/api/reviews/provider/<int:provider_id>", methods=["GET"])
+def get_provider_reviews(provider_id):
+    """Get all reviews for a specific provider — public endpoint."""
+    db = get_db()
+    rows = db.execute(
+        """SELECT r.*, u.name AS customer_name
+           FROM reviews r JOIN users u ON r.customer_id = u.id
+           WHERE r.provider_id=?
+           ORDER BY r.created_at DESC LIMIT 20""",
+        (provider_id,)
+    ).fetchall()
+    # Also get aggregate stats
+    stats = db.execute(
+        "SELECT AVG(rating) AS avg_rating, COUNT(*) AS total FROM reviews WHERE provider_id=?",
+        (provider_id,)
+    ).fetchone()
+    db.close()
+    return jsonify({
+        "reviews": [dict(r) for r in rows],
+        "avg_rating": round(stats["avg_rating"] or 0, 1),
+        "total": stats["total"]
+    })
 
 
 # ═══════════════════════════════════════════
@@ -1263,8 +1494,10 @@ if __name__ == "__main__":
 ╠══════════════════════════════════════════════════════╣
 ║  http://localhost:5000                               ║
 ╠══════════════════════════════════════════════════════╣
-║  NEW ENDPOINTS (v3):                                 ║
-║    POST /api/requests/:id/decline      — Skip job    ║
+║  NEW ENDPOINTS (v4):                                 ║
+║    POST /api/auth/signup/send-otp   — Send signup OTP║
+║    POST /api/auth/signup/verify-otp — Verify & create║
+║    POST /api/requests/:id/decline   — Skip job       ║
 ║    POST /api/requests/:id/generate-otp — Get OTP     ║
 ║    POST /api/requests/:id/complete-otp — Submit OTP  ║
 ║  UPDATED:                                            ║
