@@ -8,6 +8,15 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script>
+  /* ── EmailJS Config ─────────────────────────────────────────────────
+     Replace the 3 values below with your actual EmailJS credentials.
+     See setup guide in the comments of server.py or ask for instructions.
+  ──────────────────────────────────────────────────────────────────── */
+  window.EMAILJS_SERVICE_ID  = "service_yk6153m";
+  window.EMAILJS_TEMPLATE_ID = "template_avd7gmf";
+  window.EMAILJS_PUBLIC_KEY  = "1-vJ8TFBrr73aE5Wf";
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'DM Sans',sans-serif;min-height:100vh;background:#0d1117;}
@@ -120,9 +129,12 @@ const API={
     }
   },
   login:(e,p)=>API.call("/api/auth/login",{method:"POST",body:JSON.stringify({email:e,password:p})}),
+  loginVerifyOtp:(userId,otp)=>API.call("/api/auth/login/verify-otp",{method:"POST",body:JSON.stringify({user_id:userId,otp})}),
   signup:(d)=>API.call("/api/auth/signup",{method:"POST",body:JSON.stringify(d)}),
+  signupSendOtp:(d)=>API.call("/api/auth/signup/send-otp",{method:"POST",body:JSON.stringify(d)}),
+  signupVerifyOtp:(sessionKey,otp)=>API.call("/api/auth/signup/verify-otp",{method:"POST",body:JSON.stringify({session_key:sessionKey,otp})}),
   forgotPw:(e)=>API.call("/api/auth/forgot-password",{method:"POST",body:JSON.stringify({email:e})}),
-  resetPw:(d)=>API.call("/api/auth/reset-password",{method:"POST",body:JSON.stringify(d)}),
+  forgotVerifyOtp:(userId,otp,newPw)=>API.call("/api/auth/forgot-password/verify-otp",{method:"POST",body:JSON.stringify({user_id:userId,otp,new_password:newPw})}),
   getMe:()=>API.call("/api/users/me"),
   updateMe:(d)=>API.call("/api/users/me",{method:"PUT",body:JSON.stringify(d)}),
   deleteMe:()=>API.call("/api/users/me",{method:"DELETE"}),
@@ -147,6 +159,9 @@ const API={
   acceptReq:(id)=>API.call(`/api/requests/${id}/accept`,{method:"POST"}),
   cancelReq:(id)=>API.call(`/api/requests/${id}/cancel`,{method:"POST"}),
   startWork:(id)=>API.call(`/api/requests/${id}/start-work`,{method:"POST"}),
+  submitRating:(d)=>API.call("/api/reviews",{method:"POST",body:JSON.stringify(d)}),
+  getProviderReviews:(id)=>API.call(`/api/reviews/provider/${id}`),
+  checkMyRating:(reqId)=>API.call(`/api/reviews/check/${reqId}`),
 };
 
 /* ══════════════════════════════════════
@@ -265,35 +280,36 @@ function SocietySelect({value,onChange,t}){
    FORGOT PASSWORD MODAL
 ══════════════════════════════════════ */
 function ForgotPasswordModal({onClose,t}){
-  const [step,setStep]=useState(1); // 1=enter email, 2=enter code+new pw
+  const [step,setStep]=useState(1); // 1=email, 2=otp+newpw
   const [email,setEmail]=useState("");
-  const [code,setCode]=useState("");
+  const [userId,setUserId]=useState(null);
+  const [otp,setOtp]=useState("");
   const [newPw,setNewPw]=useState("");
-  const [showPw,setShowPw]=useState(false);
   const [msg,setMsg]=useState("");
   const [err,setErr]=useState("");
   const [load,setLoad]=useState(false);
-  const [displayCode,setDisplayCode]=useState(""); // shown in demo
+  const [devOtp,setDevOtp]=useState(""); // shown when email not configured
 
-  const requestReset=async()=>{
+  const requestOtp=async()=>{
     if(!email){setErr("Enter your email address.");return;}
     setLoad(true);setErr("");
     try{
       const r=await API.forgotPw(email);
-      setDisplayCode(r.reset_token||"");
-      setMsg(`Reset code sent! ${r.reset_token?"Demo code: "+r.reset_token:""}`);
+      setUserId(r.user_id);
+      if(r.otp)setDevOtp(r.otp); // dev mode: no email configured
+      setMsg(r.email_sent?"OTP sent to your email! Check inbox.":"OTP generated (email not configured).");
       setStep(2);
     }catch(e){setErr(e.message);}
     setLoad(false);
   };
 
   const doReset=async()=>{
-    if(!code||!newPw){setErr("Enter the code and new password.");return;}
+    if(!otp||!newPw){setErr("Enter the OTP and new password.");return;}
     if(newPw.length<6){setErr("Password must be at least 6 characters.");return;}
     setLoad(true);setErr("");
     try{
-      await API.resetPw({email,reset_token:code,new_password:newPw});
-      setMsg("Password updated! You can now log in.");
+      await API.forgotVerifyOtp(userId,otp,newPw);
+      setMsg("✅ Password reset! You can now log in.");
       setTimeout(onClose,1800);
     }catch(e){setErr(e.message);}
     setLoad(false);
@@ -309,21 +325,36 @@ function ForgotPasswordModal({onClose,t}){
         <ErrBox msg={err} t={{border:""}}/>
         <OkBox msg={msg} t={{border:""}}/>
         {step===1&&<>
-          <p style={{fontSize:13,color:"#7d8590",marginBottom:12}}>Enter your registered email. We'll generate a reset code.</p>
-          <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email address" onKeyDown={e=>e.key==="Enter"&&requestReset()}
+          <p style={{fontSize:13,color:"#7d8590",marginBottom:12}}>Enter your registered email. A 6-digit OTP will be sent to it.</p>
+          <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email address" onKeyDown={e=>e.key==="Enter"&&requestOtp()}
             style={{width:"100%",padding:"11px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",background:"rgba(0,0,0,0.3)",color:"#e6edf3",fontSize:14,boxSizing:"border-box",marginBottom:12}}/>
-          <Btn onClick={requestReset} disabled={load} full>{load?"Sending…":"Get Reset Code →"}</Btn>
+          <Btn onClick={requestOtp} disabled={load} full>{load?"Sending OTP…":"Send OTP →"}</Btn>
         </>}
         {step===2&&<>
-          <p style={{fontSize:13,color:"#7d8590",marginBottom:12}}>Enter the reset code and your new password.</p>
-          <input value={code} onChange={e=>setCode(e.target.value.toUpperCase())} placeholder="Reset code (e.g. A1B2C3D4)" maxLength={8}
-            style={{width:"100%",padding:"11px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",background:"rgba(0,0,0,0.3)",color:"#e6edf3",fontSize:14,boxSizing:"border-box",marginBottom:10,letterSpacing:2,fontFamily:"monospace"}}/>
-          <div style={{position:"relative",marginBottom:14}}>
-            <input type={showPw?"text":"password"} value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="New password (min 6 chars)"
-              style={{width:"100%",padding:"11px 42px 11px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",background:"rgba(0,0,0,0.3)",color:"#e6edf3",fontSize:14,boxSizing:"border-box"}}/>
-            <button onClick={()=>setShowPw(s=>!s)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",fontSize:16,color:"#6b7280",padding:0}}>{showPw?"🙈":"👁️"}</button>
+          <p style={{fontSize:13,color:"#7d8590",marginBottom:4}}>Enter the 6-digit OTP sent to <b style={{color:"#f59e0b"}}>{email}</b> and your new password.</p>
+          {devOtp&&<div style={{padding:"8px 12px",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:8,fontSize:12,color:"#f59e0b",marginBottom:10}}>
+            ⚠️ Email not configured — your OTP is: <b style={{letterSpacing:3,fontSize:16}}>{devOtp}</b>
+          </div>}
+          <div style={{display:"flex",gap:6,marginBottom:10}}>
+            {[0,1,2,3,4,5].map(i=>(
+              <input key={i} id={`fotp${i}`} type="text" inputMode="numeric" maxLength={1} value={otp[i]||""}
+                onChange={e=>{
+                  const v=e.target.value.replace(/\D/g,"");
+                  const arr=otp.split("");
+                  arr[i]=v;
+                  const joined=arr.join("").slice(0,6);
+                  setOtp(joined);
+                  if(v&&i<5)document.getElementById(`fotp${i+1}`)?.focus();
+                }}
+                onKeyDown={e=>{if(e.key==="Backspace"&&!otp[i]&&i>0)document.getElementById(`fotp${i-1}`)?.focus();}}
+                style={{flex:1,padding:"12px 0",textAlign:"center",fontSize:20,fontWeight:700,borderRadius:10,border:`1px solid ${otp[i]?"#f59e0b":"rgba(255,255,255,0.1)"}`,background:"rgba(0,0,0,0.3)",color:"#f59e0b",fontFamily:"monospace"}}/>
+            ))}
           </div>
-          <Btn onClick={doReset} disabled={load} full>{load?"Updating…":"Reset Password →"}</Btn>
+          <PwInput value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="New Password (min 6 chars)" t={{border:"rgba(255,255,255,0.1)"}}/>
+          <div style={{marginTop:12,display:"flex",gap:8}}>
+            <Btn v="ghost" onClick={()=>{setStep(1);setOtp("");setDevOtp("");setErr("");setMsg("");}}>← Back</Btn>
+            <Btn onClick={doReset} disabled={load||otp.length<6} full>{load?"Verifying…":"Reset Password ✓"}</Btn>
+          </div>
         </>}
       </div>
     </div>
@@ -337,6 +368,16 @@ function Auth({onLogin}){
   const [mode,setMode]=useState("login");
   const [showForgot,setShowForgot]=useState(false);
   const [flipping,setFlipping]=useState(false);
+  // OTP login state
+  const [otpStep,setOtpStep]=useState(false);
+  const [pendingUserId,setPendingUserId]=useState(null);
+  const [loginOtp,setLoginOtp]=useState("");
+  const [devOtp,setDevOtp]=useState("");
+  // OTP signup state
+  const [signupOtpStep,setSignupOtpStep]=useState(false);
+  const [signupSessionKey,setSignupSessionKey]=useState(null);
+  const [signupOtp,setSignupOtp]=useState("");
+  const [signupDevOtp,setSignupDevOtp]=useState("");
   const [f,setF]=useState({name:"",email:"",pass:"",phone:"",role:"customer",skill:"",society:"Shapoorji Complex, New Town",exp:""});
   const sv=(k,v)=>setF(p=>({...p,[k]:v}));
   const [err,setErr]=useState("");
@@ -373,18 +414,26 @@ function Auth({onLogin}){
     setLoad(true);setErr("");
     try{
       if(mode==="login"){
-        const {token,user}=await API.login(f.email,f.pass);
-        localStorage.setItem("sc_token",token);
-        onLogin(user);
+        const r=await API.login(f.email,f.pass);
+        if(r.otp_required){
+          setPendingUserId(r.user_id);
+          if(r.otp)setDevOtp(r.otp);
+          setOtpStep(true);
+        } else {
+          // fallback direct login (shouldn't happen with new backend)
+          localStorage.setItem("sc_token",r.token);
+          onLogin(r.user);
+        }
       }else{
-        const {token,user}=await API.signup({
+        const r=await API.signupSendOtp({
           name:f.name,email:f.email,password:f.pass,
           phone:f.phone.replace(/\D/g,""),
           role:f.role,skill:f.role==="provider"?f.skill:"",
           society:f.society,experience:f.exp||""
         });
-        localStorage.setItem("sc_token",token);
-        onLogin(user);
+        setSignupSessionKey(r.session_key);
+        if(r.otp)setSignupDevOtp(r.otp);
+        setSignupOtpStep(true);
       }
     }catch(e){setErr(e.message);}
     setLoad(false);
@@ -402,6 +451,137 @@ function Auth({onLogin}){
 
         <div style={{perspective:"1200px"}}>
         <div style={{background:"rgba(22,27,34,0.97)",borderRadius:22,border:"1px solid rgba(255,255,255,0.07)",padding:26,transition:"transform 0.28s cubic-bezier(0.4,0,0.2,1), opacity 0.28s ease",transform:flipping?"rotateY(90deg) scale(0.96)":"rotateY(0deg) scale(1)",opacity:flipping?0:1,willChange:"transform,opacity"}}>
+
+          {/* LOGIN OTP VERIFICATION STEP */}
+          {otpStep&&<div className="fade-in">
+            <div style={{textAlign:"center",marginBottom:16}}>
+              <div style={{fontSize:36,marginBottom:8}}>📧</div>
+              <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:"#e6edf3",margin:"0 0 6px"}}>Verify Your Identity</h3>
+              <p style={{fontSize:13,color:"#7d8590"}}>Enter the 6-digit OTP sent to <b style={{color:"#f59e0b"}}>{f.email}</b></p>
+            </div>
+            {devOtp&&<div style={{padding:"8px 12px",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:8,fontSize:12,color:"#f59e0b",marginBottom:10,textAlign:"center"}}>
+              ⚠️ Email not configured — OTP: <b style={{letterSpacing:3,fontSize:16}}>{devOtp}</b>
+            </div>}
+            {err&&<ErrBox msg={err} t={t}/>}
+            <div style={{display:"flex",gap:8,marginBottom:16,justifyContent:"center"}}>
+              {[0,1,2,3,4,5].map(i=>(
+                <input key={i} id={`lotp${i}`} type="text" inputMode="numeric" maxLength={1} value={loginOtp[i]||""}
+                  onChange={e=>{
+                    const v=e.target.value.replace(/\D/g,"");
+                    const arr=loginOtp.split("");
+                    arr[i]=v;
+                    const joined=arr.join("").slice(0,6);
+                    setLoginOtp(joined);
+                    if(v&&i<5)document.getElementById(`lotp${i+1}`)?.focus();
+                    if(joined.length===6){
+                      setLoad(true);setErr("");
+                      API.loginVerifyOtp(pendingUserId,joined).then(r=>{
+                        localStorage.setItem("sc_token",r.token);onLogin(r.user);
+                      }).catch(e=>{setErr(e.message);setLoad(false);});
+                    }
+                  }}
+                  onPaste={e=>{
+                    e.preventDefault();
+                    const pasted=e.clipboardData.getData("text").replace(/\D/g,"").slice(0,6);
+                    if(!pasted)return;
+                    setLoginOtp(pasted);
+                    for(let k=0;k<6;k++){const el=document.getElementById(`lotp${k}`);if(el)el.value=pasted[k]||"";}
+                    document.getElementById(`lotp${Math.min(pasted.length,5)}`)?.focus();
+                    if(pasted.length===6){
+                      setLoad(true);setErr("");
+                      API.loginVerifyOtp(pendingUserId,pasted).then(r=>{
+                        localStorage.setItem("sc_token",r.token);onLogin(r.user);
+                      }).catch(e=>{setErr(e.message);setLoad(false);});
+                    }
+                  }}
+                  onKeyDown={e=>{if(e.key==="Backspace"&&!loginOtp[i]&&i>0)document.getElementById(`lotp${i-1}`)?.focus();}}
+                  style={{width:42,height:52,textAlign:"center",fontSize:22,fontWeight:700,borderRadius:10,border:`1px solid ${loginOtp[i]?"#f59e0b":"rgba(255,255,255,0.1)"}`,background:"rgba(0,0,0,0.3)",color:"#f59e0b",fontFamily:"monospace"}}/>
+              ))}
+            </div>
+            <Btn onClick={async()=>{
+              setLoad(true);setErr("");
+              try{const r=await API.loginVerifyOtp(pendingUserId,loginOtp);localStorage.setItem("sc_token",r.token);onLogin(r.user);}
+              catch(e){setErr(e.message);}
+              setLoad(false);
+            }} disabled={load||loginOtp.length<6} full>{load?"Verifying…":"Confirm OTP →"}</Btn>
+            <button onClick={()=>{setOtpStep(false);setLoginOtp("");setDevOtp("");setErr("");}} style={{width:"100%",marginTop:10,background:"none",border:"none",color:"#7d8590",fontSize:12,cursor:"pointer"}}>← Back to Sign In</button>
+          </div>}
+
+          {signupOtpStep&&<div className="fade-in">
+            <div style={{textAlign:"center",marginBottom:16}}>
+              <div style={{fontSize:36,marginBottom:8}}>✉️</div>
+              <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:"#e6edf3",margin:"0 0 6px"}}>Verify Your Email</h3>
+              <p style={{fontSize:13,color:"#7d8590",lineHeight:1.6}}>We sent a 6-digit OTP to<br/><b style={{color:"#f59e0b"}}>{f.email}</b><br/><span style={{color:"#4b5563",fontSize:12}}>Enter it below to activate your account.</span></p>
+            </div>
+            {signupDevOtp&&<div style={{padding:"8px 12px",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:8,fontSize:12,color:"#f59e0b",marginBottom:10,textAlign:"center"}}>
+              ⚠️ Email not configured — OTP: <b style={{letterSpacing:3,fontSize:16}}>{signupDevOtp}</b>
+            </div>}
+            {err&&<ErrBox msg={err} t={t}/>}
+            <div style={{display:"flex",gap:8,marginBottom:16,justifyContent:"center"}}>
+              {[0,1,2,3,4,5].map(i=>(
+                <input key={i} id={`sotp${i}`} type="text" inputMode="numeric" maxLength={1} value={signupOtp[i]||""}
+                  onChange={e=>{
+                    const v=e.target.value.replace(/\D/g,"");
+                    const arr=signupOtp.split("");
+                    arr[i]=v;
+                    const joined=arr.join("").slice(0,6);
+                    setSignupOtp(joined);
+                    if(v&&i<5)document.getElementById(`sotp${i+1}`)?.focus();
+                    if(joined.length===6){
+                      if(joined!==signupSessionKey){setErr("Incorrect OTP. Please try again.");return;}
+                      setLoad(true);setErr("");
+                      API.signup({name:f.name,email:f.email,password:f.pass,phone:f.phone.replace(/\D/g,""),role:f.role,skill:f.role==="provider"?f.skill:"",society:f.society,experience:f.exp||""}).then(r=>{
+                        localStorage.setItem("sc_token",r.token);onLogin(r.user);
+                      }).catch(e=>{setErr(e.message);setLoad(false);});
+                    }
+                  }}
+                  onPaste={e=>{
+                    e.preventDefault();
+                    const pasted=e.clipboardData.getData("text").replace(/\D/g,"").slice(0,6);
+                    if(!pasted)return;
+                    setSignupOtp(pasted);
+                    // fill all visible boxes then focus last filled
+                    for(let k=0;k<6;k++){const el=document.getElementById(`sotp${k}`);if(el)el.value=pasted[k]||"";}
+                    const nextEmpty=pasted.length<6?pasted.length:5;
+                    document.getElementById(`sotp${nextEmpty}`)?.focus();
+                    if(pasted.length===6){
+                      if(pasted!==signupSessionKey){setErr("Incorrect OTP. Please try again.");return;}
+                      setLoad(true);setErr("");
+                      API.signup({name:f.name,email:f.email,password:f.pass,phone:f.phone.replace(/\D/g,""),role:f.role,skill:f.role==="provider"?f.skill:"",society:f.society,experience:f.exp||""}).then(r=>{
+                        localStorage.setItem("sc_token",r.token);onLogin(r.user);
+                      }).catch(e=>{setErr(e.message);setLoad(false);});
+                    }
+                  }}
+                  onKeyDown={e=>{if(e.key==="Backspace"&&!signupOtp[i]&&i>0)document.getElementById(`sotp${i-1}`)?.focus();}}
+                  style={{width:42,height:52,textAlign:"center",fontSize:22,fontWeight:700,borderRadius:10,border:`1px solid ${signupOtp[i]?"#f59e0b":"rgba(255,255,255,0.1)"}`,background:"rgba(0,0,0,0.3)",color:"#f59e0b",fontFamily:"monospace"}}/>
+              ))}
+            </div>
+            <Btn onClick={async()=>{
+              if(signupOtp!==signupSessionKey){setErr("Incorrect OTP. Please try again.");return;}
+              setLoad(true);setErr("");
+              try{
+                const r=await API.signup({name:f.name,email:f.email,password:f.pass,phone:f.phone.replace(/\D/g,""),role:f.role,skill:f.role==="provider"?f.skill:"",society:f.society,experience:f.exp||""});
+                localStorage.setItem("sc_token",r.token);onLogin(r.user);
+              }catch(e){setErr(e.message);}
+              setLoad(false);
+            }} disabled={load||signupOtp.length<6} full>{load?"Creating Account…":"Verify & Create Account ✓"}</Btn>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:10}}>
+              <button onClick={()=>{setSignupOtpStep(false);setSignupOtp("");setSignupDevOtp("");setSignupSessionKey(null);setErr("");}} style={{background:"none",border:"none",color:"#7d8590",fontSize:12,cursor:"pointer"}}>← Back</button>
+              <button onClick={async()=>{
+                setErr("");setSignupOtp("");
+                const newOtp=String(Math.floor(100000+Math.random()*900000));
+                const svcId=window.EMAILJS_SERVICE_ID,tplId=window.EMAILJS_TEMPLATE_ID,pubKey=window.EMAILJS_PUBLIC_KEY;
+                const ejsOk=svcId!=="YOUR_SERVICE_ID"&&tplId!=="YOUR_TEMPLATE_ID"&&pubKey!=="YOUR_PUBLIC_KEY";
+                if(ejsOk){try{await emailjs.send(svcId,tplId,{to_email:f.email,to_name:f.name,otp_code:newOtp,app_name:"SocietyConnect"},pubKey);}catch{setSignupDevOtp(newOtp);}}
+                else setSignupDevOtp(newOtp);
+                setSignupSessionKey(newOtp);
+                setErr("New OTP sent!");
+                setTimeout(()=>setErr(""),3000);
+              }} style={{background:"none",border:"none",color:"#f59e0b",fontSize:12,fontWeight:600,cursor:"pointer"}}>🔄 Resend OTP</button>
+            </div>
+          </div>}
+
+          {!otpStep&&!signupOtpStep&&<>
           {/* Tab toggle */}
           <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:12,padding:4,marginBottom:18,gap:4}}>
             {["login","signup"].map(m=>(
@@ -478,6 +658,7 @@ function Auth({onLogin}){
               {load?"Please wait…":mode==="login"?"Sign In →":"Create Account →"}
             </button>
           </div>
+          </>}
         </div>
         </div>
       </div>
@@ -557,7 +738,7 @@ function TopBar({act,t,dark,setDark,setOpen,unread,setAct}){
 function DashHome({user,reqs,t,setAct}){
   const done=reqs.filter(r=>r.status==="Completed").length;
   const pend=reqs.filter(r=>r.status==="Pending").length;
-  const actv=reqs.filter(r=>!["Completed","Pending"].includes(r.status)).length;
+  const actv=reqs.filter(r=>!["Completed","Pending","Cancelled","Declined"].includes(r.status)).length;
   const hr=new Date().getHours();
   const greet=hr<12?"Morning":hr<17?"Afternoon":"Evening";
   return(
@@ -679,6 +860,8 @@ function ServiceReq({user,t,onRequestCreated,setNotifs}){
   const [tlLoad,setTlLoad]=useState(false);
   const [tld,setTld]=useState("");
   const [err,setErr]=useState("");
+  const [imageData,setImageData]=useState("");
+  const [imagePreview,setImagePreview]=useState("");
   const sv=k=>v=>setF(p=>({...p,[k]:v}));
   const est=f.svc?PRICE[f.svc]:null;
   const steps=["Service","Details","Choose Provider","Done"];
@@ -709,6 +892,7 @@ function ServiceReq({user,t,onRequestCreated,setNotifs}){
       try{
         const payload={service_type:f.svc,description:f.desc,emergency:f.emergency?1:0};
         if(selectedProvider)payload.preferred_provider_id=selectedProvider.id;
+        if(imageData)payload.image_data=imageData;
         const req=await API.createRequest(payload);
         onRequestCreated(req);
         setNotifs(p=>[{id:Date.now(),type:"info",icon:"👷",title:"Request Submitted",message:`${f.svc} request submitted.`,time:"just now",read_flag:0},...p]);
@@ -762,6 +946,31 @@ function ServiceReq({user,t,onRequestCreated,setNotifs}){
             <p style={{fontSize:11,color:"#818cf8",margin:"0 0 3px",fontWeight:600}}>🌐 English:</p>
             <p style={{fontSize:13,color:t.txt,margin:0}}>{tld}</p>
           </div>}
+
+          {/* Photo upload */}
+          <div style={{marginBottom:14}}>
+            <p style={{fontSize:13,fontWeight:600,color:t.muted,marginBottom:8}}>📷 Add a Photo <span style={{fontWeight:400,color:"#4b5563"}}>(optional — helps provider understand the issue)</span></p>
+            {!imagePreview&&<label style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,padding:"20px",border:`2px dashed ${t.border}`,borderRadius:12,cursor:"pointer",background:"rgba(0,0,0,0.15)",transition:"border-color 0.2s"}}
+              onDragOver={e=>{e.preventDefault();}}
+              onDrop={e=>{e.preventDefault();const file=e.dataTransfer.files[0];if(file&&file.type.startsWith("image/")){const r=new FileReader();r.onload=ev=>{setImagePreview(ev.target.result);setImageData(ev.target.result);};r.readAsDataURL(file);}}}>
+              <span style={{fontSize:28}}>📸</span>
+              <span style={{fontSize:13,color:t.muted}}>Tap to upload or drag &amp; drop</span>
+              <span style={{fontSize:11,color:"#4b5563"}}>JPG, PNG — max 2MB</span>
+              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
+                const file=e.target.files[0];
+                if(!file)return;
+                if(file.size>2*1024*1024){alert("Image too large. Max 2MB.");return;}
+                const r=new FileReader();
+                r.onload=ev=>{setImagePreview(ev.target.result);setImageData(ev.target.result);};
+                r.readAsDataURL(file);
+              }}/>
+            </label>}
+            {imagePreview&&<div style={{position:"relative",display:"inline-block",width:"100%"}}>
+              <img src={imagePreview} alt="preview" style={{width:"100%",maxHeight:180,objectFit:"cover",borderRadius:12,border:`1px solid ${t.border}`}}/>
+              <button onClick={()=>{setImagePreview("");setImageData("");}} style={{position:"absolute",top:8,right:8,background:"rgba(239,68,68,0.85)",border:"none",borderRadius:"50%",width:28,height:28,color:"#fff",fontSize:14,cursor:"pointer",fontWeight:700}}>×</button>
+            </div>}
+          </div>
+
           <div style={{display:"flex",gap:10,justifyContent:"space-between"}}><Btn v="ghost" onClick={()=>setStep(1)}>← Back</Btn><Btn onClick={go} disabled={!f.desc}>Find Providers →</Btn></div>
         </div>}
         {step===3&&<div>
@@ -802,7 +1011,10 @@ function ServiceReq({user,t,onRequestCreated,setNotifs}){
                         <p style={{fontSize:12,color:t.muted,margin:"0 0 4px"}}>{p.experience||"—"} exp · {p.jobs_done||0} jobs done</p>
                         <div style={{display:"flex",gap:12,alignItems:"center"}}>
                           <span style={{fontSize:13,color:"#f59e0b",fontWeight:700}}>₹{p.price_min}–{p.price_max}/{p.price_unit}</span>
-                          <span style={{fontSize:12,color:"#fbbf24"}}>⭐ {p.rating||"—"}</span>
+                          <span style={{display:"flex",alignItems:"center",gap:3}}>
+                            {[1,2,3,4,5].map(i=><span key={i} style={{fontSize:12,color:i<=Math.round(p.rating||0)?"#f59e0b":"rgba(255,255,255,0.15)"}}>★</span>)}
+                            <span style={{fontSize:11,color:t.muted,marginLeft:2}}>{p.rating?Number(p.rating).toFixed(1):"New"}{p.reviews_count?` (${p.reviews_count})`:""}</span>
+                          </span>
                           <span style={{background:"rgba(16,185,129,0.12)",color:"#10b981",fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:7}}>Available ✓</span>
                         </div>
                       </div>
@@ -857,11 +1069,37 @@ function ChatView({t,user,reqs}){
   const [msgs,setMsgs]=useState([]);
   const [inp,setInp]=useState("");
   const [loading,setLoading]=useState(false);
+  const [refreshing,setRefreshing]=useState(false);
   const endRef=useRef(null);
+  const pollRef=useRef(null);
   useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
   const activeReqs=reqs.filter(r=>r.status!=="Completed");
-  const loadMsgs=async(reqId)=>{setLoading(true);try{setMsgs(await API.getMessages(reqId));}catch{setMsgs([]);}setLoading(false);};
-  const selectReq=(req)=>{setSelReq(req);loadMsgs(req.id);};
+  const loadMsgs=async(reqId,silent=false)=>{
+    if(!silent)setLoading(true);
+    try{
+      const fresh=await API.getMessages(reqId);
+      setMsgs(prev=>{
+        // Only update if something actually changed (avoid re-render flicker)
+        if(JSON.stringify(prev.map(m=>m.id))===JSON.stringify(fresh.map(m=>m.id)))return prev;
+        return fresh;
+      });
+    }catch{}
+    if(!silent)setLoading(false);
+  };
+  const selectReq=(req)=>{
+    setSelReq(req);loadMsgs(req.id);
+    // Start polling every 5s for new messages
+    if(pollRef.current)clearInterval(pollRef.current);
+    pollRef.current=setInterval(()=>loadMsgs(req.id,true),5000);
+  };
+  // Stop polling when leaving chat or unmounting
+  useEffect(()=>()=>{if(pollRef.current)clearInterval(pollRef.current);},[]);
+  const manualRefresh=async()=>{
+    if(!selReq)return;
+    setRefreshing(true);
+    await loadMsgs(selReq.id,true);
+    setRefreshing(false);
+  };
   const send=async()=>{
     if(!inp.trim()||!selReq)return;
     const text=inp;setInp("");
@@ -886,8 +1124,12 @@ function ChatView({t,user,reqs}){
   return(
     <div className="fade-in">
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
-        <button onClick={()=>setSelReq(null)} style={{background:"none",border:"none",color:t.muted,fontSize:20,padding:"2px 6px 2px 0"}}>←</button>
-        <div><h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:t.txt,margin:0}}>{selReq.service_type} Chat</h2><p style={{color:t.muted,fontSize:12,marginTop:2}}>{selReq.description}</p></div>
+        <button onClick={()=>{setSelReq(null);if(pollRef.current)clearInterval(pollRef.current);}} style={{background:"none",border:"none",color:t.muted,fontSize:20,padding:"2px 6px 2px 0"}}>←</button>
+        <div style={{flex:1}}><h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:t.txt,margin:0}}>{selReq.service_type} Chat</h2><p style={{color:t.muted,fontSize:12,marginTop:2}}>{selReq.description}</p></div>
+        <button onClick={manualRefresh} title="Refresh messages" style={{background:"none",border:`1px solid ${t.border}`,color:t.muted,borderRadius:8,padding:"5px 10px",fontSize:13,display:"flex",alignItems:"center",gap:5}}>
+          <span style={{display:"inline-block",transition:"transform 0.4s",transform:refreshing?"rotate(360deg)":"none"}}>↻</span>
+          <span style={{fontSize:11}}>{refreshing?"…":"Refresh"}</span>
+        </button>
       </div>
       <Card t={t} style={{padding:0,overflow:"hidden"}}>
         <div style={{padding:"11px 14px",borderBottom:`1px solid ${t.border}`}}><Badge s={selReq.status}/></div>
@@ -915,6 +1157,91 @@ function ChatView({t,user,reqs}){
 }
 
 /* ══════════════════════════════════════
+   RATING MODAL — star rating after job completion
+══════════════════════════════════════ */
+function RatingModal({req,onClose,onDone,t}){
+  const [stars,setStars]=useState(0);
+  const [hovered,setHovered]=useState(0);
+  const [comment,setComment]=useState("");
+  const [load,setLoad]=useState(false);
+  const [err,setErr]=useState("");
+
+  const LABELS=["","Terrible","Poor","Okay","Good","Excellent!"];
+  const COLORS=["","#ef4444","#f97316","#eab308","#84cc16","#10b981"];
+
+  const submit=async()=>{
+    if(!stars){setErr("Please select a rating.");return;}
+    setLoad(true);setErr("");
+    try{
+      await API.submitRating({
+        request_id:req.id,
+        provider_id:req.provider_id,
+        rating:stars,
+        comment:comment.trim()
+      });
+      onDone(req.id,stars);
+      onClose();
+    }catch(e){setErr(e.message);}
+    setLoad(false);
+  };
+
+  return(
+    <div className="modal-bg" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal-box" style={{maxWidth:400}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:"#e6edf3",margin:0}}>⭐ Rate Your Experience</h3>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#7d8590",fontSize:22,lineHeight:1}}>×</button>
+        </div>
+
+        {/* Provider info */}
+        <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 13px",background:"rgba(245,158,11,0.06)",border:"1px solid rgba(245,158,11,0.15)",borderRadius:11,marginBottom:18}}>
+          <Av s={req.provider_name||"P"} sz={38}/>
+          <div>
+            <p style={{fontSize:14,fontWeight:700,color:"#e6edf3",margin:0}}>{req.provider_name||"Provider"}</p>
+            <p style={{fontSize:12,color:"#7d8590",margin:"2px 0 0"}}>{req.service_type} · {req.created_at}</p>
+          </div>
+        </div>
+
+        {/* Star selector */}
+        <p style={{fontSize:13,color:"#7d8590",marginBottom:10,textAlign:"center"}}>How was the service?</p>
+        <div style={{display:"flex",justifyContent:"center",gap:8,marginBottom:8}}>
+          {[1,2,3,4,5].map(s=>(
+            <button key={s}
+              onMouseEnter={()=>setHovered(s)}
+              onMouseLeave={()=>setHovered(0)}
+              onClick={()=>setStars(s)}
+              style={{
+                background:"none",border:"none",fontSize:36,
+                color:(hovered||stars)>=s?(COLORS[hovered||stars]||"#f59e0b"):"rgba(255,255,255,0.12)",
+                transform:(hovered||stars)>=s?"scale(1.18)":"scale(1)",
+                transition:"all 0.15s",cursor:"pointer",padding:"0 2px"
+              }}>★</button>
+          ))}
+        </div>
+        {(hovered||stars)>0&&<p style={{textAlign:"center",fontSize:14,fontWeight:700,color:COLORS[hovered||stars]||"#f59e0b",marginBottom:14,animation:"fadeIn 0.2s"}}>{LABELS[hovered||stars]}</p>}
+        {!(hovered||stars)&&<div style={{height:22,marginBottom:14}}/>}
+
+        {/* Comment */}
+        <textarea value={comment} onChange={e=>setComment(e.target.value)}
+          placeholder="Leave a comment (optional)…"
+          style={{width:"100%",padding:"10px 13px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",background:"rgba(0,0,0,0.3)",color:"#e6edf3",fontSize:13,resize:"vertical",minHeight:70,boxSizing:"border-box",fontFamily:"inherit",outline:"none",marginBottom:12}}/>
+
+        {err&&<div style={{fontSize:12,color:"#f87171",marginBottom:10,textAlign:"center"}}>{err}</div>}
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="ghost" onClick={onClose} style={{flex:1}}>Skip</Btn>
+          <button onClick={submit} disabled={load||!stars}
+            style={{flex:2,padding:"11px",borderRadius:10,border:"none",fontSize:14,fontWeight:700,
+              background:stars?"linear-gradient(135deg,#f59e0b,#d97706)":"rgba(100,100,100,0.3)",
+              color:stars?"#111":"#666",transition:"all 0.15s"}}>
+            {load?"Submitting…":"Submit Rating ⭐"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════
    HISTORY
 ══════════════════════════════════════ */
 function History({t,reqs,onRefresh,user}){
@@ -923,10 +1250,22 @@ function History({t,reqs,onRefresh,user}){
   const [otpLoading,setOtpLoading]=useState({});
   const [actionLoading,setActionLoading]=useState({});
   const [localReqs,setLocalReqs]=useState(reqs);
-  const [confirmCancel,setConfirmCancel]=useState(null); // req object to confirm cancel
+  const [confirmCancel,setConfirmCancel]=useState(null);
+  const [ratingReq,setRatingReq]=useState(null);  // req to rate
+  const [ratedIds,setRatedIds]=useState({});       // reqId → star value (already rated)
   const {toasts,err,ok}=useToast();
 
   useEffect(()=>setLocalReqs(reqs),[reqs]);
+
+  // Load already-rated IDs on mount
+  useEffect(()=>{
+    localReqs.filter(r=>r.status==="Completed"&&r.provider_id).forEach(async r=>{
+      try{
+        const res=await API.checkMyRating(r.id);
+        if(res&&res.rating)setRatedIds(p=>({...p,[r.id]:res.rating}));
+      }catch{}
+    });
+  },[]);
 
   const fl=filter==="All"?localReqs:localReqs.filter(r=>r.status===filter);
 
@@ -970,6 +1309,9 @@ function History({t,reqs,onRefresh,user}){
   return(
     <div className="fade-in">
       <Toast toasts={toasts}/>
+      {ratingReq&&<RatingModal req={ratingReq} onClose={()=>setRatingReq(null)}
+        onDone={(reqId,stars)=>{setRatedIds(p=>({...p,[reqId]:stars}));ok(`Thanks! You gave ${stars}⭐`);}}
+        t={t}/>}
       {confirmCancel&&<ConfirmModal
         msg={`Cancel ${confirmCancel.service_type} request?`}
         subMsg="This will cancel your request. You can submit a new one anytime."
@@ -1004,6 +1346,9 @@ function History({t,reqs,onRefresh,user}){
                   </div>
                   <p style={{fontSize:13,color:t.muted,margin:"0 0 4px"}}>{r.description}</p>
                   <p style={{fontSize:11,color:t.muted,margin:"0 0 6px"}}>{r.created_at} · {r.cost||"TBD"}</p>
+                  {r.image_data&&<div style={{marginBottom:8}}>
+                    <img src={r.image_data} alt="issue" style={{width:"100%",maxHeight:160,objectFit:"cover",borderRadius:10,border:`1px solid ${t.border}`}}/>
+                  </div>}
                   {r.provider_name&&<p style={{fontSize:12,color:"#f59e0b",margin:"0 0 8px",fontWeight:600}}>👷 Provider: {r.provider_name}</p>}
 
                   {/* Provider location status banner */}
@@ -1066,7 +1411,20 @@ function History({t,reqs,onRefresh,user}){
                     </div>
                   )}
 
-                  {r.status==="Completed"&&<p style={{fontSize:13,color:"#10b981",fontWeight:700,margin:"6px 0 0"}}>✅ Job Completed</p>}
+                  {r.status==="Completed"&&<>
+                    <p style={{fontSize:13,color:"#10b981",fontWeight:700,margin:"6px 0 4px"}}>✅ Job Completed</p>
+                    {user.role==="customer"&&r.provider_id&&(
+                      ratedIds[r.id]
+                        ?<div style={{display:"flex",alignItems:"center",gap:6,padding:"7px 11px",background:"rgba(245,158,11,0.07)",border:"1px solid rgba(245,158,11,0.18)",borderRadius:9,marginTop:4}}>
+                           <span style={{fontSize:15}}>{[...Array(ratedIds[r.id])].map((_,i)=><span key={i} style={{color:"#f59e0b"}}>★</span>)}{[...Array(5-ratedIds[r.id])].map((_,i)=><span key={i} style={{color:"rgba(255,255,255,0.12)"}}>★</span>)}</span>
+                           <span style={{fontSize:12,color:"#f59e0b",fontWeight:600}}>You rated this {ratedIds[r.id]}/5</span>
+                         </div>
+                        :<button onClick={()=>setRatingReq(r)}
+                           style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",borderRadius:20,border:"1px solid rgba(245,158,11,0.35)",background:"rgba(245,158,11,0.08)",color:"#f59e0b",fontSize:12,fontWeight:700,marginTop:6,cursor:"pointer"}}>
+                           ⭐ Rate this service
+                         </button>
+                    )}
+                  </>}
                   {r.status==="Cancelled"&&<p style={{fontSize:13,color:"#f87171",fontWeight:700,margin:"6px 0 0"}}>❌ Request Cancelled</p>}
                 </div>
               </div>
@@ -1511,13 +1869,14 @@ function AdminPanel({t}){
 ══════════════════════════════════════ */
 function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
   const [avail,setAvail]=useState(user.available!==0);
-  const [myJobs,setMyJobs]=useState([]);
+  // myJobs is now a useMemo below — removed useState
   const [tab,setTab]=useState("open");
   const [otpInputs,setOtpInputs]=useState({});
   const [otpLoading,setOtpLoading]=useState({});
   const [otpError,setOtpError]=useState({});
   const [showOtpField,setShowOtpField]=useState({});
   const [decliningId,setDecliningId]=useState(null);
+  const [declinedIds,setDeclinedIds]=useState(new Set()); // track locally-declined request IDs
   const [actionLoading,setActionLoading]=useState({});
   const [loadingJobs,setLoadingJobs]=useState(true);
   const [confirmCancelJob,setConfirmCancelJob]=useState(null);
@@ -1525,37 +1884,34 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
 
   const userSkills=useMemo(()=>(user.skill||"").split(",").map(x=>x.trim()).filter(Boolean),[user.skill]);
 
-  // Load provider's assigned jobs from server on mount
+  // Fetch fresh data when provider panel mounts (supplements App-level loadData)
   useEffect(()=>{
     (async()=>{
       setLoadingJobs(true);
       try{
         const all=await API.getRequests();
-        // Merge into globalReqs
         setGlobalReqs(all);
-        // My jobs = assigned to me and not pending/cancelled/declined
-        const mine=all.filter(r=>r.provider_id===user.id&&!["Pending","Cancelled","Declined"].includes(r.status));
-        setMyJobs(mine);
       }catch{}
       setLoadingJobs(false);
     })();
   },[user.id]);
 
+  // myJobs derived from globalReqs — always in sync, never vanishes on navigate
+  const myJobs=useMemo(()=>
+    globalReqs.filter(r=>r.provider_id===user.id&&!["Pending","Cancelled","Declined"].includes(r.status))
+  ,[globalReqs,user.id]);
+
   const openReqs=useMemo(()=>globalReqs.filter(r=>{
     if(r.status!=="Pending"||r.provider_id)return false;
+    if(declinedIds.has(r.id))return false; // hide locally declined
     return userSkills.includes(r.service_type);
-  }),[globalReqs,userSkills]);
+  }),[globalReqs,userSkills,declinedIds]);
 
   const acceptJob=async(req)=>{
     setActionLoading(p=>({...p,[req.id]:"accept"}));
     try{
       const updated=await API.acceptReq(req.id);
       setGlobalReqs(prev=>prev.map(r=>r.id===req.id?{...r,...updated}:r));
-      setMyJobs(p=>{
-        // don't duplicate
-        if(p.find(j=>j.id===req.id))return p.map(j=>j.id===req.id?{...j,...updated}:j);
-        return [...p,{...req,...updated}];
-      });
       setNotifs(p=>[{id:Date.now(),type:"assign",icon:"✅",title:"Job Accepted",message:`Accepted: ${req.service_type}`,time:"just now",read_flag:0},...p]);
       setTab("mine");
     }catch(e){err(e.message);}
@@ -1564,11 +1920,17 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
 
   const declineJob=async(req)=>{
     setDecliningId(req.id);
+    // Optimistically hide the job immediately before API call
+    setDeclinedIds(prev=>new Set([...prev,req.id]));
     try{
       await API.declineReq(req.id);
       setGlobalReqs(prev=>prev.map(r=>r.id===req.id?{...r,declined:true}:r));
       setNotifs(p=>[{id:Date.now(),type:"info",icon:"⏭️",title:"Job Skipped",message:`Skipped ${req.service_type} request.`,time:"just now",read_flag:0},...p]);
-    }catch(e){err(e.message);}
+    }catch(e){
+      // Revert the optimistic hide if API fails
+      setDeclinedIds(prev=>{const n=new Set(prev);n.delete(req.id);return n;});
+      err(e.message);
+    }
     setDecliningId(null);
   };
 
@@ -1582,8 +1944,7 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setActionLoading(p=>({...p,[job.id]:"cancel"}));
     try{
       await API.cancelReq(job.id);
-      setMyJobs(p=>p.filter(j=>j.id!==job.id));
-      setGlobalReqs(prev=>prev.filter(r=>r.id!==job.id));
+            setGlobalReqs(prev=>prev.filter(r=>r.id!==job.id));
       setNotifs(p=>[{id:Date.now(),type:"info",icon:"❌",title:"Job Cancelled",message:`${job.service_type} job cancelled.`,time:"just now",read_flag:0},...p]);
       ok("Job cancelled.");
     }catch(e){err(e.message);}
@@ -1594,7 +1955,6 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setActionLoading(p=>({...p,[job.id]:"otw"}));
     try{
       const updated=await API.updateRequest(job.id,{status:"On the way"});
-      setMyJobs(p=>p.map(j=>j.id===job.id?{...j,...updated}:j));
       setGlobalReqs(prev=>prev.map(r=>r.id===job.id?{...r,...updated}:r));
     }catch(e){err(e.message);}
     setActionLoading(p=>({...p,[job.id]:undefined}));
@@ -1604,7 +1964,6 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setActionLoading(p=>({...p,[jobId]:newStatus}));
     try{
       const updated=await API.updateRequest(jobId,{status:newStatus});
-      setMyJobs(p=>p.map(j=>j.id===jobId?{...j,...updated}:j));
       setGlobalReqs(prev=>prev.map(r=>r.id===jobId?{...r,...updated}:r));
     }catch(e){err(e.message);}
     setActionLoading(p=>({...p,[jobId]:undefined}));
@@ -1614,7 +1973,6 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setActionLoading(p=>({...p,[job.id]:"start"}));
     try{
       const updated=await API.startWork(job.id);
-      setMyJobs(p=>p.map(j=>j.id===job.id?{...j,...updated}:j));
       setGlobalReqs(prev=>prev.map(r=>r.id===job.id?{...r,...updated}:r));
       ok("Work started! Customer notified.");
     }catch(e){err(e.message);}
@@ -1627,7 +1985,6 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
     setOtpLoading(p=>({...p,[jobId]:true}));setOtpError(p=>({...p,[jobId]:""}));
     try{
       const updated=await API.completeWithOtp(jobId,otp);
-      setMyJobs(p=>p.map(j=>j.id===jobId?{...j,...updated}:j));
       setGlobalReqs(prev=>prev.map(r=>r.id===jobId?{...r,...updated}:r));
       setNotifs(p=>[{id:Date.now(),type:"complete",icon:"✅",title:"Job Completed!",message:`${updated.service_type} job marked done.`,time:"just now",read_flag:0},...p]);
       setShowOtpField(p=>({...p,[jobId]:false}));
@@ -1689,7 +2046,12 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
 
       {/* Stats */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:12,marginBottom:16}}>
-        {[["📋",openReqs.length,"Open Requests"],["🔨",myJobs.filter(j=>j.status!=="Completed").length,"Active Jobs"],["⭐",user.rating||"—","Rating"]].map(([i,v,l])=>(
+        {[
+          ["📋",openReqs.length,"Open Requests"],
+          ["🔨",myJobs.filter(j=>j.status!=="Completed").length,"Active Jobs"],
+          ["⭐",user.rating?Number(user.rating).toFixed(1):"—","My Rating"],
+          ["📦",user.jobs_done||0,"Jobs Done"]
+        ].map(([i,v,l])=>(
           <div key={l} style={{background:t.card,border:`1px solid ${t.border}`,borderRadius:14,padding:"13px 10px",textAlign:"center"}}>
             <p style={{fontSize:20,margin:"0 0 5px"}}>{i}</p>
             <p style={{fontSize:22,fontWeight:700,color:t.txt,margin:"0 0 2px"}}>{v}</p>
@@ -1700,8 +2062,8 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
 
       {/* Tabs */}
       <div style={{display:"flex",background:"rgba(0,0,0,0.2)",borderRadius:11,padding:4,marginBottom:14,gap:4}}>
-        {[["open",`🔓 Open (${openReqs.length})`],["mine",`🔨 My Jobs (${myJobs.filter(j=>j.status!=="Completed").length})`]].map(([k,lbl])=>(
-          <button key={k} onClick={()=>setTab(k)} style={{flex:1,padding:"8px",borderRadius:8,border:"none",fontSize:12,fontWeight:700,background:tab===k?"linear-gradient(135deg,#f59e0b,#d97706)":"transparent",color:tab===k?"#111":"#6b7280"}}>{lbl}</button>
+        {[["open",`🔓 Open (${openReqs.length})`],["mine",`🔨 My Jobs (${myJobs.filter(j=>j.status!=="Completed").length})`],["reviews","⭐ My Reviews"]].map(([k,lbl])=>(
+          <button key={k} onClick={()=>setTab(k)} style={{flex:1,padding:"8px",borderRadius:8,border:"none",fontSize:11,fontWeight:700,background:tab===k?"linear-gradient(135deg,#f59e0b,#d97706)":"transparent",color:tab===k?"#111":"#6b7280"}}>{lbl}</button>
         ))}
       </div>
 
@@ -1726,6 +2088,9 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
                 <Badge s={r.status}/>
               </div>
               <p style={{fontSize:13,color:t.txt,margin:"0 0 9px",background:t.card,padding:"8px 10px",borderRadius:8,lineHeight:1.5}}>{r.description}</p>
+              {r.image_data&&<div style={{marginBottom:9}}>
+                <img src={r.image_data} alt="issue" style={{width:"100%",maxHeight:150,objectFit:"cover",borderRadius:10,border:`1px solid ${t.border}`}}/>
+              </div>}
               <p style={{fontSize:12,color:"#f59e0b",margin:"0 0 9px",fontWeight:600}}>💰 {r.cost||"TBD"}</p>
               <div style={{display:"flex",gap:8}}>
                 {avail
@@ -1825,7 +2190,95 @@ function ProviderPanel({user,t,globalReqs,setGlobalReqs,setNotifs}){
           })
         }
       </Card>}
+
+      {/* Reviews Tab */}
+      {tab==="reviews"&&<ProviderReviewsTab user={user} t={t}/>}
     </div>
+  );
+}
+
+/* ══════════════════════════════════════
+   PROVIDER REVIEWS TAB
+══════════════════════════════════════ */
+function ProviderReviewsTab({user,t}){
+  const [reviews,setReviews]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [avgRating,setAvgRating]=useState(0);
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      try{
+        const data=await API.getProviderReviews(user.id);
+        setReviews(data.reviews||[]);
+        setAvgRating(data.avg_rating||0);
+      }catch{}
+      setLoading(false);
+    })();
+  },[user.id]);
+
+  const renderStars=(n,size=14)=>(
+    <span>
+      {[1,2,3,4,5].map(i=>(
+        <span key={i} style={{color:i<=Math.round(n)?"#f59e0b":"rgba(255,255,255,0.14)",fontSize:size}}>★</span>
+      ))}
+    </span>
+  );
+
+  if(loading)return <Card t={t}><div style={{textAlign:"center",padding:40,color:t.muted}}>Loading reviews…</div></Card>;
+
+  return(
+    <Card t={t}>
+      {/* Summary bar */}
+      {reviews.length>0&&<div style={{display:"flex",alignItems:"center",gap:16,padding:"14px 16px",background:"rgba(245,158,11,0.06)",border:"1px solid rgba(245,158,11,0.18)",borderRadius:12,marginBottom:16}}>
+        <div style={{textAlign:"center"}}>
+          <p style={{fontSize:38,fontWeight:900,color:"#f59e0b",margin:0,lineHeight:1}}>{avgRating.toFixed(1)}</p>
+          <div style={{marginTop:4}}>{renderStars(avgRating,16)}</div>
+          <p style={{fontSize:11,color:t.muted,margin:"4px 0 0"}}>{reviews.length} review{reviews.length!==1?"s":""}</p>
+        </div>
+        <div style={{flex:1}}>
+          {[5,4,3,2,1].map(star=>{
+            const count=reviews.filter(r=>r.rating===star).length;
+            const pct=reviews.length?Math.round(count/reviews.length*100):0;
+            return(
+              <div key={star} style={{display:"flex",alignItems:"center",gap:7,marginBottom:4}}>
+                <span style={{fontSize:11,color:"#f59e0b",width:10,textAlign:"right",fontWeight:700}}>{star}</span>
+                <span style={{fontSize:10}}>★</span>
+                <div style={{flex:1,height:6,background:"rgba(255,255,255,0.07)",borderRadius:3,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${pct}%`,background:"#f59e0b",borderRadius:3,transition:"width 0.5s"}}/>
+                </div>
+                <span style={{fontSize:10,color:t.muted,width:28,textAlign:"right"}}>{count}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>}
+
+      {reviews.length===0&&<div style={{textAlign:"center",padding:"36px 0",color:t.muted}}>
+        <p style={{fontSize:32,marginBottom:10}}>⭐</p>
+        <p style={{fontSize:14,fontWeight:600,marginBottom:4}}>No reviews yet</p>
+        <p style={{fontSize:13}}>Complete jobs to start receiving ratings from customers</p>
+      </div>}
+
+      {reviews.map(r=>(
+        <div key={r.id} style={{padding:"12px 14px",background:t.hov,borderRadius:11,marginBottom:9,border:`1px solid ${t.border}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <Av s={r.customer_name||"C"} sz={30} col="#6b7280"/>
+              <div>
+                <p style={{fontSize:13,fontWeight:700,color:t.txt,margin:0}}>{r.customer_name||"Customer"}</p>
+                <p style={{fontSize:10,color:t.muted,margin:"1px 0 0"}}>{r.created_at}</p>
+              </div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              {renderStars(r.rating,15)}
+              <p style={{fontSize:10,color:"#f59e0b",margin:"2px 0 0",fontWeight:700}}>{r.rating}/5</p>
+            </div>
+          </div>
+          {r.comment&&<p style={{fontSize:13,color:t.muted,margin:0,lineHeight:1.55,padding:"8px 10px",background:t.card,borderRadius:8,borderLeft:"3px solid rgba(245,158,11,0.3)"}}>{r.comment}</p>}
+        </div>
+      ))}
+    </Card>
   );
 }
 
